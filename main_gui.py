@@ -2,24 +2,29 @@ import sys
 import os
 import speech_recognition as sr
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                            QPushButton, QComboBox, QLabel, QTextEdit, QFileDialog)
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QIcon, QDragEnterEvent, QDropEvent
+                            QPushButton, QComboBox, QLabel, QTextEdit, QFileDialog, QProgressBar)
+from PyQt5.QtCore import Qt, QPropertyAnimation, QEasingCurve
+from PyQt5.QtGui import QFont, QIcon, QDragEnterEvent, QDropEvent
+from pydub import AudioSegment
 import pyttsx3
-import pyaudio  # Імпорт для коректної роботи speech_recognition
+import pyaudio
 from uuid import uuid4
 
 class AudioTranscriber(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Audio to Text Transcriber")
-        self.setGeometry(100, 100, 600, 400)
+        self.setFixedSize(500, 500)  # Квадратне вікно, не маштабується
         self.setAcceptDrops(True)
         self.audio_file = None
         self.init_ui()
         self.init_speech_engine()
 
     def init_ui(self):
+        # Встановлення шрифту
+        font = QFont("Roboto", 12)  # Використовуємо Roboto для гарного вигляду
+        QApplication.setFont(font)
+
         # Основний віджет та лейаут
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
@@ -55,10 +60,25 @@ class AudioTranscriber(QMainWindow):
         self.process_button.setEnabled(False)
         main_layout.addWidget(self.process_button)
 
+        # Індикатор прогресу (анімація)
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setTextVisible(False)
+        self.progress_bar.setStyleSheet("QProgressBar::chunk { background-color: #4CAF50; }")
+        main_layout.addWidget(self.progress_bar)
+
         # Текстове поле для результату
         self.result_text = QTextEdit()
         self.result_text.setReadOnly(True)
         main_layout.addWidget(self.result_text)
+
+        # Налаштування анімації прогрес-бару
+        self.progress_animation = QPropertyAnimation(self.progress_bar, b"value")
+        self.progress_animation.setDuration(2000)
+        self.progress_animation.setStartValue(0)
+        self.progress_animation.setEndValue(100)
+        self.progress_animation.setLoopCount(-1)
+        self.progress_animation.setEasingCurve(QEasingCurve.InOutQuad)
 
     def init_speech_engine(self):
         self.recognizer = sr.Recognizer()
@@ -69,10 +89,12 @@ class AudioTranscriber(QMainWindow):
             self.setStyleSheet("background-color: #2b2b2b; color: #ffffff;")
             self.drop_label.setStyleSheet("border: 2px dashed #aaa; padding: 20px; font-size: 16px; background-color: #3b3b3b; color: #ffffff;")
             self.result_text.setStyleSheet("background-color: #3b3b3b; color: #ffffff;")
+            self.process_button.setStyleSheet("background-color: #4CAF50; color: #ffffff;")
         else:
             self.setStyleSheet("")
             self.drop_label.setStyleSheet("border: 2px dashed #aaa; padding: 20px; font-size: 16px;")
             self.result_text.setStyleSheet("")
+            self.process_button.setStyleSheet("")
 
     def dragEnterEvent(self, event: QDragEnterEvent):
         if event.mimeData().hasUrls():
@@ -87,7 +109,7 @@ class AudioTranscriber(QMainWindow):
 
     def browse_file(self, event):
         file, _ = QFileDialog.getOpenFileName(self, "Select Audio File", "",
-                                             "Audio Files (*.wav *.mp3 *.flac *.ogg)")
+                                             "Audio Files (*.wav *.mp3 *.flac *.ogg *.aac)")
         if file:
             self.audio_file = file
             self.drop_label.setText(f"Selected File: {os.path.basename(self.audio_file)}")
@@ -100,15 +122,21 @@ class AudioTranscriber(QMainWindow):
 
         self.result_text.setText("Processing...")
         self.process_button.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_animation.start()
         QApplication.processEvents()
 
         try:
-            with sr.AudioFile(self.audio_file) as source:
-                audio = self.recognizer.record(source)
+            # Конвертація аудіо у WAV для speech_recognition
+            audio = AudioSegment.from_file(self.audio_file)
+            temp_wav = f"temp_{uuid4()}.wav"
+            audio.export(temp_wav, format="wav")
+
+            with sr.AudioFile(temp_wav) as source:
+                audio_data = self.recognizer.record(source)
             language = self.language_combo.currentText()
-            text = self.recognizer.recognize_google(audio, language=language)
+            text = self.recognizer.recognize_google(audio_data, language=language)
             self.result_text.setText(text)
-            # Озвучення результату
             self.tts_engine.say("Transcription complete")
             self.tts_engine.runAndWait()
         except sr.UnknownValueError:
@@ -118,7 +146,11 @@ class AudioTranscriber(QMainWindow):
         except Exception as e:
             self.result_text.setText(f"Unexpected error: {str(e)}")
         finally:
+            self.progress_animation.stop()
+            self.progress_bar.setVisible(False)
             self.process_button.setEnabled(True)
+            if os.path.exists(temp_wav):
+                os.remove(temp_wav)  # Видаляємо тимчасовий файл
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
